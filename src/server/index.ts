@@ -1,5 +1,5 @@
 import amqp from "amqplib";
-import { publishJSON } from "../internal/pubsub/pubsub.js";
+import { publishJSON } from "../internal/pubsub/publish.js";
 import { ExchangePerilDirect, PauseKey } from "../internal/routing/routing.js";
 import type { PlayingState } from "../internal/gamelogic/gamestate.js";
 
@@ -9,10 +9,6 @@ async function main() {
   const rabbitMQConnection: string = "amqp://guest:guest@localhost:5672/";
   const connection = await amqp.connect(rabbitMQConnection);
   console.log("Connection to RabbitMQ was successful.");
-
-  const confirmChannel = await connection.createConfirmChannel();
-  const pauseState: PlayingState = { isPaused: true };
-  await publishJSON(confirmChannel, ExchangePerilDirect, PauseKey, pauseState);
 
   ["SIGINT", "SIGTERM"].forEach((signal) =>
     process.on(signal, async () => {
@@ -26,6 +22,14 @@ async function main() {
       }
     }),
   );
+
+  const confirmChannel = await connection.createConfirmChannel();
+  const pauseState: PlayingState = { isPaused: true };
+  try {
+    await publishJSON(confirmChannel, ExchangePerilDirect, PauseKey, pauseState);
+  } catch (err) {
+    console.error("Error publishing message:", err);
+  }
 }
 
 main().catch((err) => {
