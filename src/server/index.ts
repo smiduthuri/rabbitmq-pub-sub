@@ -33,33 +33,38 @@ async function main() {
     if (!inputWords.length) {
       continue;
     }
-    switch (inputWords[0]) {
-      case "help":
-        printServerHelp();
-        break;
-      case "pause":
-        try {
-          await publishJSON(confirmChannel, ExchangePerilDirect, PauseKey, { isPaused: true });
-        } catch (err) {
-          console.error("Error publishing message:", err);
-        }
-        break;
-      case "resume":
-        try {
-          await publishJSON(confirmChannel, ExchangePerilDirect, PauseKey, { isPaused: false });
-        } catch (err) {
-          console.error("Error publishing message:", err);
-        }
-        break;
-      case "quit":
-        console.log("Exiting game.");
-        quit = true;
-        break;
-      default:
-        console.log("Unknown command:", inputWords[0]);
-        break;
+    try {
+      switch (inputWords[0]) {
+        case "help":
+          printServerHelp();
+          break;
+        case "pause":
+          try {
+            await publishJSON(confirmChannel, ExchangePerilDirect, PauseKey, { isPaused: true });
+          } catch (err) {
+            console.error("Error publishing message:", err);
+          }
+          break;
+        case "resume":
+          try {
+            await publishJSON(confirmChannel, ExchangePerilDirect, PauseKey, { isPaused: false });
+          } catch (err) {
+            console.error("Error publishing message:", err);
+          }
+          break;
+        case "quit":
+          console.log("Exiting game.");
+          quit = true;
+          break;
+        default:
+          console.log("Unknown command:", inputWords[0]);
+          break;
+      }
+    } catch (err) {
+      console.error(err);
     }
   }
+  process.exit(0);
 }
 
 main().catch((err) => {
