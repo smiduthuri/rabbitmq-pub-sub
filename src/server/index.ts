@@ -1,6 +1,7 @@
 import amqp from "amqplib";
+import { SimpleQueueType, declareAndBindQueue } from "../internal/pubsub/consume.js";
 import { publishJSON } from "../internal/pubsub/publish.js";
-import { ExchangePerilDirect, PauseKey } from "../internal/routing/routing.js";
+import { ExchangePerilDirect, ExchangePerilTopic, GameLogSlug, PauseKey } from "../internal/routing/routing.js";
 import { getInput, printServerHelp } from "../internal/gamelogic/gamelogic.js";
 
 
@@ -26,10 +27,12 @@ async function main() {
   printServerHelp();
 
   const confirmChannel = await connection.createConfirmChannel();
+  await declareAndBindQueue(connection, ExchangePerilTopic, GameLogSlug, `${GameLogSlug}.*`, SimpleQueueType.DURABLE);
+
   let quit: boolean = false;
 
   while (!quit) {
-    const inputWords: string[] = await getInput("What next?\n");
+    const inputWords: string[] = await getInput("> ");
     if (!inputWords.length) {
       continue;
     }
