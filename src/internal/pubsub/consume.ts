@@ -5,6 +5,13 @@ export enum SimpleQueueType {
   TRANSIENT,
 };
 
+export enum AckType {
+  Ack = 1,
+  NackRequeue,
+  NackDiscard,
+};
+
+
 export async function declareAndBindQueue(
   conn: ChannelModel,
   exchange: string,
@@ -17,6 +24,7 @@ export async function declareAndBindQueue(
     durable: queueType === SimpleQueueType.DURABLE,
     autoDelete: queueType === SimpleQueueType.TRANSIENT,
     exclusive: queueType === SimpleQueueType.TRANSIENT,
+    arguments: { "x-dead-letter-exchange": "peril_dlx" },
   };
   const newQueue: Replies.AssertQueue = await channel.assertQueue(queueName, queueOptions);
   await channel.bindQueue(newQueue.queue, exchange, key);
@@ -30,7 +38,7 @@ export async function subscribeJSON<T>(
   queueName: string,
   key: string,
   queueType: SimpleQueueType,
-  handler: (data: T) => void,
+  handler: (data: T) => AckType,
 ): Promise<void> {
   const response = await declareAndBindQueue(conn, exchange, queueName, key, queueType);
   const channel: Channel = response[0];
@@ -41,9 +49,24 @@ export async function subscribeJSON<T>(
     }
     // Get message and run message handler.
     const messageContent = JSON.parse(message.content.toString());
-    handler(messageContent);
+    const response: AckType = handler(messageContent);
 
     // Remove message from queue with ack
-    channel.ack(message);
+    switch (response) {
+      case AckType.Ack:
+        channel.ack(message);
+        // console.debug(`Acked ${message.content.toString()}`);
+        break;
+      case AckType.NackRequeue:
+        channel.nack(message, false, true);
+        // console.debug(`NackRequeued ${message.content.toString()}`);
+        break;
+      case AckType.NackDiscard:
+        channel.nack(message, false, false);
+        // console.debug(`NackDiscarded ${message.content.toString()}`);
+        break;
+      default:
+        throw new Error(`Unknown handler response: ${response}`);
+    }
   });
 }

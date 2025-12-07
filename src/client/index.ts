@@ -2,31 +2,46 @@ import amqp from "amqplib";
 import { type ArmyMove } from "../internal/gamelogic/gamedata.js";
 import { clientWelcome, commandStatus, getInput, printClientHelp, printQuit } from "../internal/gamelogic/gamelogic.js";
 import { GameState, type PlayingState } from "../internal/gamelogic/gamestate.js";
-import { commandMove, handleMove } from "../internal/gamelogic/move.js";
+import { MoveOutcome, commandMove, handleMove } from "../internal/gamelogic/move.js";
 import { handlePause } from "../internal/gamelogic/pause.js";
 import { commandSpawn } from "../internal/gamelogic/spawn.js";
-import { declareAndBindQueue, SimpleQueueType, subscribeJSON } from "../internal/pubsub/consume.js";
+import { AckType, SimpleQueueType, declareAndBindQueue, subscribeJSON } from "../internal/pubsub/consume.js";
 import { publishJSON } from "../internal/pubsub/publish.js";
 import { ArmyMovesPrefix, ExchangePerilDirect, ExchangePerilTopic, PauseKey } from "../internal/routing/routing.js";
 
 
-function handlerPause(gs: GameState): (ps: PlayingState) => void {
+function handlerPause(gs: GameState): (ps: PlayingState) => AckType {
   const handler = (ps: PlayingState) => {
     handlePause(gs, ps);
     process.stdout.write("> ");
+    return AckType.Ack
   };
   return handler;
 }
 
 
-function handlerMove(gs: GameState): (move: ArmyMove) => void {
+function handlerMove(gs: GameState): (move: ArmyMove) => AckType {
   const handler = (move: ArmyMove) => {
+    let failed = false;
+    let outcome: MoveOutcome = MoveOutcome.Safe;
     try {
-      handleMove(gs, move);
+      outcome = handleMove(gs, move);
     } catch (err) {
       console.error((err as Error).message);
+      failed = true;
+    } finally {
+      process.stdout.write("> ");
     }
-    process.stdout.write("> ");
+
+    if (!failed) {
+      if (outcome === MoveOutcome.Safe || outcome === MoveOutcome.MakeWar) {
+        return AckType.Ack;
+      } else {
+        return AckType.NackDiscard;
+      }
+    } else {
+      return AckType.NackDiscard;
+    }
   };
   return handler;
 }
