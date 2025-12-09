@@ -1,5 +1,5 @@
-import amqp from "amqplib";
-import { type ArmyMove } from "../internal/gamelogic/gamedata.js";
+import amqp, { type ConfirmChannel } from "amqplib";
+import type { ArmyMove, RecognitionOfWar } from "../internal/gamelogic/gamedata.js";
 import { clientWelcome, commandStatus, getInput, printClientHelp, printQuit } from "../internal/gamelogic/gamelogic.js";
 import { GameState, type PlayingState } from "../internal/gamelogic/gamestate.js";
 import { MoveOutcome, commandMove, handleMove } from "../internal/gamelogic/move.js";
@@ -7,8 +7,10 @@ import { handlePause } from "../internal/gamelogic/pause.js";
 import { commandSpawn } from "../internal/gamelogic/spawn.js";
 import { AckType, SimpleQueueType, declareAndBindQueue, subscribeJSON } from "../internal/pubsub/consume.js";
 import { publishJSON } from "../internal/pubsub/publish.js";
-import { ArmyMovesPrefix, ExchangePerilDirect, ExchangePerilTopic, PauseKey } from "../internal/routing/routing.js";
-
+import {
+  ArmyMovesPrefix, ExchangePerilDirect, ExchangePerilTopic, PauseKey, WarRecognitionsPrefix
+} from "../internal/routing/routing.js";
+import { WarOutcome, handleWar } from "../internal/gamelogic/war.js";
 
 function handlerPause(gs: GameState): (ps: PlayingState) => AckType {
   const handler = (ps: PlayingState) => {
@@ -20,28 +22,66 @@ function handlerPause(gs: GameState): (ps: PlayingState) => AckType {
 }
 
 
-function handlerMove(gs: GameState): (move: ArmyMove) => AckType {
-  const handler = (move: ArmyMove) => {
-    let failed = false;
-    let outcome: MoveOutcome = MoveOutcome.Safe;
-    try {
-      outcome = handleMove(gs, move);
-    } catch (err) {
-      console.error((err as Error).message);
-      failed = true;
-    } finally {
-      process.stdout.write("> ");
+function handlerMove(channel: ConfirmChannel, gs: GameState, username: string): (move: ArmyMove) => Promise<AckType> {
+  const handler = async (move: ArmyMove): Promise<AckType> => {
+    const outcome = handleMove(gs, move);
+    let ack = AckType.Ack;
+    switch (outcome) {
+      case MoveOutcome.MakeWar:
+        try {
+          await publishJSON(
+            channel,
+            ExchangePerilTopic,
+            `${WarRecognitionsPrefix}.${username}`,
+            { attacker: move.player, defender: gs.getPlayerSnap() } as RecognitionOfWar
+          );
+          ack = AckType.Ack;
+        } catch (err) {
+          console.error(`Failed to publish war recognition due to ${err as Error}`);
+          ack = AckType.NackRequeue;
+        }
+        break;
+      case MoveOutcome.Safe:
+        ack = AckType.Ack;
+        break;
+      default:
+        ack = AckType.NackDiscard;
+        break;
     }
+    process.stdout.write("> ");
+    return ack;
+  };
+  return handler;
+}
 
-    if (!failed) {
-      if (outcome === MoveOutcome.Safe || outcome === MoveOutcome.MakeWar) {
-        return AckType.Ack;
-      } else {
-        return AckType.NackDiscard;
-      }
-    } else {
-      return AckType.NackDiscard;
+
+function handlerWar(gs: GameState): (rw: RecognitionOfWar) => Promise<AckType> {
+  const handler = async (rw: RecognitionOfWar): Promise<AckType> => {
+    const resolution = handleWar(gs, rw);
+    let ack = AckType.Ack;
+    switch (resolution.result) {
+      case WarOutcome.NotInvolved:
+        ack = AckType.NackRequeue;
+        break;
+      case WarOutcome.NoUnits:
+        ack = AckType.NackDiscard;
+        break;
+      case WarOutcome.OpponentWon:
+        ack = AckType.Ack;
+        break;
+      case WarOutcome.YouWon:
+        ack = AckType.Ack;
+        break;
+      case WarOutcome.Draw:
+        ack = AckType.Ack;
+        break;
+      default:
+        console.error(`Unknown war resolution: ${resolution}`);
+        ack = AckType.NackDiscard;
+        break;
     }
+    process.stdout.write("> ");
+    return ack;
   };
   return handler;
 }
@@ -71,6 +111,8 @@ async function main() {
     connection, ExchangePerilDirect, `${PauseKey}.${username}`, PauseKey, SimpleQueueType.TRANSIENT
   );
 
+  const confirmChannel = await connection.createConfirmChannel();
+
   const gameState = new GameState(username);
   await subscribeJSON(
     connection,
@@ -87,10 +129,17 @@ async function main() {
     `${ArmyMovesPrefix}.${username}`,
     `${ArmyMovesPrefix}.*`,
     SimpleQueueType.TRANSIENT,
-    handlerMove(gameState),
+    handlerMove(confirmChannel, gameState, username),
   );
 
-  const confirmChannel = await connection.createConfirmChannel();
+  await subscribeJSON(
+    connection,
+    ExchangePerilTopic,
+    WarRecognitionsPrefix,
+    `${WarRecognitionsPrefix}.*`,
+    SimpleQueueType.DURABLE,
+    handlerWar(gameState),
+  );
 
   let quit: boolean = false;
   while (!quit) {

@@ -38,18 +38,18 @@ export async function subscribeJSON<T>(
   queueName: string,
   key: string,
   queueType: SimpleQueueType,
-  handler: (data: T) => AckType,
+  handler: (data: T) => Promise<AckType> | AckType,
 ): Promise<void> {
   const response = await declareAndBindQueue(conn, exchange, queueName, key, queueType);
   const channel: Channel = response[0];
 
-  await channel.consume(queueName, (message: ConsumeMessage | null) => {
+  await channel.consume(queueName, async (message: ConsumeMessage | null) => {
     if (message === null) {
       return;
     }
     // Get message and run message handler.
     const messageContent = JSON.parse(message.content.toString());
-    const response: AckType = handler(messageContent);
+    const response = await handler(messageContent);
 
     // Remove message from queue with ack
     switch (response) {
