@@ -1,4 +1,5 @@
 import type { Channel, ChannelModel, ConsumeMessage, Replies, Options } from "amqplib";
+import { decode } from "@msgpack/msgpack";
 
 export enum SimpleQueueType {
   DURABLE = 1,
@@ -68,5 +69,45 @@ export async function subscribeJSON<T>(
       default:
         throw new Error(`Unknown handler response: ${response}`);
     }
+    process.stdout.write("> ");
+  });
+}
+
+
+export async function subscribeMsgPack<T>(
+  conn: ChannelModel,
+  exchange: string,
+  queueName: string,
+  key: string,
+  queueType: SimpleQueueType,
+  handler: (data: T) => Promise<void> | Promise<AckType> | AckType,
+  unmarshaller: (data: Buffer) => T,
+): Promise<void> {
+  const response = await declareAndBindQueue(conn, exchange, queueName, key, queueType);
+  const channel: Channel = response[0];
+
+  await channel.consume(queueName, async (message: ConsumeMessage | null) => {
+    if (message === null) {
+      return;
+    }
+    // Get message and run message handler.
+    const messageContent = unmarshaller(message.content);
+    const response = await handler(messageContent);
+
+    // Remove message from queue with ack
+    switch (response) {
+      case AckType.Ack:
+        channel.ack(message);
+        break;
+      case AckType.NackRequeue:
+        channel.nack(message, false, true);
+        break;
+      case AckType.NackDiscard:
+        channel.nack(message, false, false);
+        break;
+      default:
+        throw new Error(`Unknown handler response: ${response}`);
+    }
+    process.stdout.write("> ");
   });
 }

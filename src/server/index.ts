@@ -1,8 +1,19 @@
 import amqp from "amqplib";
-import { SimpleQueueType, declareAndBindQueue } from "../internal/pubsub/consume.js";
+import { decode } from "@msgpack/msgpack";
+import { writeLog, type GameLog } from "../internal/gamelogic/logs.js";
+import { SimpleQueueType, subscribeMsgPack, AckType } from "../internal/pubsub/consume.js";
 import { publishJSON } from "../internal/pubsub/publish.js";
 import { ExchangePerilDirect, ExchangePerilTopic, GameLogSlug, PauseKey } from "../internal/routing/routing.js";
 import { getInput, printServerHelp } from "../internal/gamelogic/gamelogic.js";
+
+
+function handlerLog(): (gameLog: GameLog) => Promise<AckType> {
+  const handler = async (gameLog: GameLog): Promise<AckType> => {
+    await writeLog(gameLog);
+    return AckType.Ack;
+  };
+  return handler;
+}
 
 
 async function main() {
@@ -27,7 +38,15 @@ async function main() {
   printServerHelp();
 
   const confirmChannel = await connection.createConfirmChannel();
-  await declareAndBindQueue(connection, ExchangePerilTopic, GameLogSlug, `${GameLogSlug}.*`, SimpleQueueType.DURABLE);
+  await subscribeMsgPack(
+    connection,
+    ExchangePerilTopic,
+    GameLogSlug,
+    `${GameLogSlug}.*`,
+    SimpleQueueType.DURABLE,
+    handlerLog(),
+    (buffer) => decode(buffer) as GameLog,
+  );
 
   let quit: boolean = false;
 

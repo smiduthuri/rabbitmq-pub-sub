@@ -2,20 +2,20 @@ import amqp, { type ConfirmChannel } from "amqplib";
 import type { ArmyMove, RecognitionOfWar } from "../internal/gamelogic/gamedata.js";
 import { clientWelcome, commandStatus, getInput, printClientHelp, printQuit } from "../internal/gamelogic/gamelogic.js";
 import { GameState, type PlayingState } from "../internal/gamelogic/gamestate.js";
+import type { GameLog } from "../internal/gamelogic/logs.js";
 import { MoveOutcome, commandMove, handleMove } from "../internal/gamelogic/move.js";
 import { handlePause } from "../internal/gamelogic/pause.js";
 import { commandSpawn } from "../internal/gamelogic/spawn.js";
 import { AckType, SimpleQueueType, declareAndBindQueue, subscribeJSON } from "../internal/pubsub/consume.js";
-import { publishJSON } from "../internal/pubsub/publish.js";
+import { publishJSON, publishMsgPack } from "../internal/pubsub/publish.js";
 import {
-  ArmyMovesPrefix, ExchangePerilDirect, ExchangePerilTopic, PauseKey, WarRecognitionsPrefix
+  ArmyMovesPrefix, ExchangePerilDirect, ExchangePerilTopic, GameLogSlug, PauseKey, WarRecognitionsPrefix
 } from "../internal/routing/routing.js";
 import { WarOutcome, handleWar } from "../internal/gamelogic/war.js";
 
 function handlerPause(gs: GameState): (ps: PlayingState) => AckType {
   const handler = (ps: PlayingState) => {
     handlePause(gs, ps);
-    process.stdout.write("> ");
     return AckType.Ack
   };
   return handler;
@@ -48,14 +48,19 @@ function handlerMove(channel: ConfirmChannel, gs: GameState, username: string): 
         ack = AckType.NackDiscard;
         break;
     }
-    process.stdout.write("> ");
     return ack;
   };
   return handler;
 }
 
 
-function handlerWar(gs: GameState): (rw: RecognitionOfWar) => Promise<AckType> {
+async function publishGameLog(channel: ConfirmChannel, username: string, message: string) {
+  const log: GameLog = { currentTime: new Date(), message: message, username: username };
+  await publishMsgPack(channel, ExchangePerilTopic, `${GameLogSlug}.${username}`, log);
+}
+
+
+function handlerWar(channel: ConfirmChannel, gs: GameState): (rw: RecognitionOfWar) => Promise<AckType> {
   const handler = async (rw: RecognitionOfWar): Promise<AckType> => {
     const resolution = handleWar(gs, rw);
     let ack = AckType.Ack;
@@ -68,19 +73,37 @@ function handlerWar(gs: GameState): (rw: RecognitionOfWar) => Promise<AckType> {
         break;
       case WarOutcome.OpponentWon:
         ack = AckType.Ack;
+        try {
+          await publishGameLog(channel, gs.getUsername(), `${resolution.winner} won a war against ${resolution.loser}`);
+        } catch (err) {
+          ack = AckType.NackRequeue;
+        }
         break;
       case WarOutcome.YouWon:
         ack = AckType.Ack;
+        try {
+          await publishGameLog(channel, gs.getUsername(), `${resolution.winner} won a war against ${resolution.loser}`);
+        } catch (err) {
+          ack = AckType.NackRequeue;
+        }
         break;
       case WarOutcome.Draw:
         ack = AckType.Ack;
+        try {
+          await publishGameLog(
+            channel,
+            gs.getUsername(),
+            `A war between ${resolution.attacker} and ${resolution.defender} resulted in a draw`,
+          );
+        } catch (err) {
+          ack = AckType.NackRequeue;
+        }
         break;
       default:
         console.error(`Unknown war resolution: ${resolution}`);
         ack = AckType.NackDiscard;
         break;
     }
-    process.stdout.write("> ");
     return ack;
   };
   return handler;
@@ -138,7 +161,7 @@ async function main() {
     WarRecognitionsPrefix,
     `${WarRecognitionsPrefix}.*`,
     SimpleQueueType.DURABLE,
-    handlerWar(gameState),
+    handlerWar(confirmChannel, gameState),
   );
 
   let quit: boolean = false;
@@ -155,7 +178,6 @@ async function main() {
         case "move":
           const move = commandMove(gameState, inputWords);
           await publishJSON(confirmChannel, ExchangePerilTopic, `${ArmyMovesPrefix}.${username}`, move);
-          console.log("Published move");
           break;
         case "status":
           await commandStatus(gameState);
