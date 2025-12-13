@@ -1,5 +1,4 @@
 import type { Channel, ChannelModel, ConsumeMessage, Replies, Options } from "amqplib";
-import { decode } from "@msgpack/msgpack";
 
 export enum SimpleQueueType {
   DURABLE = 1,
@@ -69,7 +68,6 @@ export async function subscribeJSON<T>(
       default:
         throw new Error(`Unknown handler response: ${response}`);
     }
-    process.stdout.write("> ");
   });
 }
 
@@ -85,6 +83,7 @@ export async function subscribeMsgPack<T>(
 ): Promise<void> {
   const response = await declareAndBindQueue(conn, exchange, queueName, key, queueType);
   const channel: Channel = response[0];
+  await channel.prefetch(10);
 
   await channel.consume(queueName, async (message: ConsumeMessage | null) => {
     if (message === null) {
@@ -108,6 +107,5 @@ export async function subscribeMsgPack<T>(
       default:
         throw new Error(`Unknown handler response: ${response}`);
     }
-    process.stdout.write("> ");
   });
 }

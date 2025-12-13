@@ -35,8 +35,6 @@ async function main() {
     }),
   );
 
-  printServerHelp();
-
   const confirmChannel = await connection.createConfirmChannel();
   await subscribeMsgPack(
     connection,
@@ -48,9 +46,14 @@ async function main() {
     (buffer) => decode(buffer) as GameLog,
   );
 
-  let quit: boolean = false;
+  // Used to run the server from a non-interactive source, like the multiserver.sh file
+  if (!process.stdin.isTTY) {
+    console.log("Non-interactive mode: skipping command input.");
+    return;
+  }
+  printServerHelp();
 
-  while (!quit) {
+  while (true) {
     const inputWords: string[] = await getInput("> ");
     if (!inputWords.length) {
       continue;
@@ -76,8 +79,7 @@ async function main() {
           break;
         case "quit":
           console.log("Exiting game.");
-          quit = true;
-          break;
+          process.exit(0);
         default:
           console.log("Unknown command:", inputWords[0]);
           break;
@@ -86,7 +88,6 @@ async function main() {
       console.error(err);
     }
   }
-  process.exit(0);
 }
 
 main().catch((err) => {
